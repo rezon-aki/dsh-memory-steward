@@ -33,6 +33,7 @@
     "tsdown": "^0.22.14"
   },
   "scripts": {
+    "test": "node --test test/*.test.mjs",
     "build": "bash scripts/build.sh",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build:client": "tsdown"
