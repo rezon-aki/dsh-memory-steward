@@ -20,7 +20,7 @@ description: 整理 dsh-memory-evolve 记忆：先出归档/去重/合并清单�
 - 可逆优先：被合并 / 被覆盖 / 过时 / 低价值的主轨条目一律 `archive`（可移回）；只有内容完全等价、无独立信息的重复条目才 `remove`。已进归档轨、确认被主轨收录或被新事实推翻的，用 `purge` 删除。
 - 不手写程序元数据：content 里不写 `[id:…]`、`[git …]`、日期时间戳前缀；key 合并时**保留原 `[branch:…]` 与 `[dsh-only]` 标记**（如需保留）。
 - 日志轨（project/daily）不归档：只做"同一天内明显重复进度"的合并，不删除独有信息，不做时间段压缩摘要。
-- 省 token：一轮的清单字符会进上下文（≈tokens = 字符 ÷ 2，记在 Tab「整理开销」与 `/api/rounds`）。默认先 `archiveCheck` 预筛、只对命中条目 `memory list filter=` 核对，别一上来拉全量；目标 ≤2K tokens/轮。
+- 省 token：一轮的清单字符会进上下文（≈tokens = 字符 ÷ 2，记在 Tab「整理开销」与 `/api/rounds`）。默认先 `archiveCheck` 预筛、只对命中条目 `memory list filter=` 核对，别一上来拉全量；常规轮次目标 ≤2K tokens/轮。**合并类（replace）贵得多**：ops 要同时带整条旧文（match）与新正文（content），一轮大重构 10K+ tokens 属正常——清运/删除才是便宜路径。计量口径：只有 `memory_audit` 的输出被计入轮次，用 `read` / `memory list` 硬读全文不计入（想被计量就用 `track=`）。
 
 ## 步骤
 
