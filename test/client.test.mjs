@@ -84,20 +84,23 @@ function loadClient() {
     runEffects: mini.runEffects,               // 跑 useEffect（拉真实数据）
     cleanups: [],                              // useEffect 的清理函数（15s 轮询定时器在这）
     text: () => collect(mini.render(Panel, {})).join(' '),
-    /** 找到文本含 fragment 且带 onClick 的最内层节点并点下去（模拟用户点按）。 */
+    /** 点按文本含 fragment 的按钮：多个候选时取文案最短的（最具体）那个。 */
     click: (fragment) => {
-      let fired = false
+      const hits = []
       const scan = (n) => {
-        if (fired || n === null || n === undefined || typeof n === 'boolean') return
+        if (n === null || n === undefined || typeof n === 'boolean') return
         if (typeof n === 'string' || typeof n === 'number') return
         if (Array.isArray(n)) { for (const c of n) scan(c); return }
         if (typeof n !== 'object') return
         const kids = typeof n.type === 'function' ? mini.expand(n) : n.children
-        if (n.props && typeof n.props.onClick === 'function' && collect(kids).join(' ').includes(fragment)) { n.props.onClick(); fired = true; return }
+        const txt = collect(kids).join(' ')
+        if (n.props && typeof n.props.onClick === 'function' && txt.includes(fragment)) hits.push({ onClick: n.props.onClick, len: txt.length })
         scan(kids)
       }
       scan(mini.render(Panel, {}))
-      return fired
+      if (!hits.length) return false
+      hits.sort((a, b) => a.len - b.len)[0].onClick()
+      return true
     },
     dispose: () => {
       for (const d of disposes.concat(api.cleanups)) { try { if (typeof d === 'function') d() } catch { /* 已失效 */ } }
@@ -139,7 +142,7 @@ async function withPanel(memSpec, run) {
 }
 
 test('client：面板对真实服务渲染不抛异常，开销与待审行都渲染', async () => {
-  await withPanel({ memory: [entry('2026-09-01', '全局记忆条目一')], keyArchive: [entry('2026-09-03', 'key 归档：唯一串 UNIQ-X 的历史细节')] }, async ({ mem, host, client }) => {
+  await withPanel({ memory: [entry('2026-09-01', '全局记忆条目一')], keyArchive: [entry('2026-09-03', 'key 归档：唯一串 UNIQ-X 的历史细节')] }, async ({ mem, host, srv, client }) => {
     await host.tools.get('memory_audit').execute({ track: 'memory' }, execOf(mem.cwd))
     await host.tools.get('memory_propose').execute(
       { summary: '待审样例', reason: 'S 已收录', ops: [{ op: 'purge', target: 'archive-key', match: 'UNIQ-X' }] }, execOf(mem.cwd))
@@ -165,6 +168,7 @@ test('client：面板对真实服务渲染不抛异常，开销与待审行都�
     assert.match(detail, /原记忆（将被新正文替换）/)
     assert.match(detail, /全局记忆条目一（已改写）/)      // 修改后的正文
     assert.match(detail, /原记忆（将被新正文替换）\s*\[2026-09-01\] 全局记忆条目一\s+修改后/)   // 原记忆正文紧跟在标签后
+
   })
 })
 
@@ -175,5 +179,27 @@ test('client：空态渲染（没有提案也没有轮次）', async () => {
     const { text } = await renderUntil(client, (t) => t.includes('最近检查：') && !t.includes('加载中…'))
     assert.match(text, /暂无记录/)                         // 没跑过整理
     assert.match(text, /盘点/)
+  })
+})
+test('client：历史 tab 有清理入口，单条「删除记录」真的删得掉', async () => {
+  await withPanel({ memory: [entry('2026-09-01', '唯一一条')], keyArchive: [entry('2026-09-03', '归档条目：唯一串 HIST-X')] }, async ({ mem, host, srv, client }) => {
+    // 先造一条历史（reject），再渲染——这样面板首次加载拿到的就是含历史的状态
+    await host.tools.get('memory_propose').execute({ summary: '待清记录', reason: 'x', ops: [{ op: 'purge', target: 'archive-key', match: 'HIST-X' }] }, execOf(mem.cwd))
+    const items = (await (await realFetch(srv.base + '/memory-steward/api/proposals')).json()).items
+    await realFetch(srv.base + '/memory-steward/api/proposals/reject', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ids: [items[0].id] }) })
+
+    client.render(client.Panel, {})
+    await renderUntil(client, (t) => t.includes('历史 1'))
+    assert.equal(client.click('历史'), true, '应能切到历史 tab')
+    await new Promise((r) => setTimeout(r, 20))
+    let hist = client.text()
+    assert.match(hist, /删除记录/)                       // 单条清理入口
+    assert.match(hist, /清空历史（只删记录）/)             // 批量清理入口（此前点了只报错，是坏的）
+    assert.match(hist, /待清记录/)
+    assert.equal(client.click('删除记录'), true)
+    await new Promise((r) => setTimeout(r, 120))         // 等 act() 的 post + load 回来
+    hist = client.text()
+    assert.equal(hist.includes('待清记录'), false, '删除记录后该条应从历史消失')
+    assert.match(hist, /暂无历史/)
   })
 })

@@ -318,3 +318,29 @@ test('并发重复提交同一提案：只执行一次，另一次被挡', async
     assert.equal(item.status, 'applied')
   } finally { await s.teardown() }
 })
+test('历史清理：按 id 删单条；空 ids 清空全部历史但不动待审', async () => {
+  const s = await setup()
+  try {
+    await s.tool('memory_propose', { summary: '甲', reason: 'x', ops: [{ op: 'purge', target: 'archive-key', match: 'ALPHA-UNIQUE' }] })
+    await s.tool('memory_propose', { summary: '乙', reason: 'x', ops: [{ op: 'purge', target: 'archive-key', match: 'BETA-UNIQUE' }] })
+    const items = (await getJson(s.srv.base, '/memory-steward/api/proposals')).body.items
+    const jia = items.find((i) => i.summary === '甲'), yi = items.find((i) => i.summary === '乙')
+    await postJson(s.srv.base, '/memory-steward/api/proposals/reject', { ids: [jia.id] })
+    const one = await postJson(s.srv.base, '/memory-steward/api/proposals/purge', { ids: [jia.id] })
+    assert.equal(one.status, 200)
+    let left = (await getJson(s.srv.base, '/memory-steward/api/proposals')).body.items
+    assert.deepEqual(left.map((i) => i.id), [yi.id])                    // 只删了那一条
+    await postJson(s.srv.base, '/memory-steward/api/proposals/reject', { ids: [yi.id] })
+    const all = await postJson(s.srv.base, '/memory-steward/api/proposals/purge', {})   // 空 ids = 清空历史
+    assert.equal(all.status, 200)
+    assert.match(all.body.results[0].message, /已清除 1 条历史/)
+    assert.equal((await getJson(s.srv.base, '/memory-steward/api/proposals')).body.items.length, 0)
+    // 有待审时清空历史，待审必须留下
+    await s.tool('memory_propose', { summary: '丙', reason: 'x', ops: [{ op: 'purge', target: 'archive-key', match: 'ALPHA-UNIQUE' }] })
+    await postJson(s.srv.base, '/memory-steward/api/proposals/purge', {})
+    left = (await getJson(s.srv.base, '/memory-steward/api/proposals')).body.items
+    assert.equal(left.length, 1)
+    assert.equal(left[0].status, 'pending')
+    assert.equal(s.srv.calls.length, 0, '清记录不该碰记忆')
+  } finally { await s.teardown() }
+})
