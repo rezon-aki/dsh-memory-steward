@@ -56,7 +56,7 @@ node scripts/fixture.mjs clear     # 验完清干净（含待审，零残留）
 | 症状 | 先看 |
 |---|---|
 | Tab 完全不出现 | `node scripts/selfcheck.mjs` 看「客户端 bundle 已组合」；再看 `/api/status` 的 `clientPath.urls` 是否含 `steward` |
-| Tab 在但一片空白 | 浏览器控制台找 `slot entry crashed` / React error #130（组件没作为第二位置参数注册，见 memory-hygiene 的槽位契约） |
+| Tab 在但一片空白 | 浏览器控制台找 `slot entry crashed` / React error #130（组件没作为第二位置参数注册，见 docs/ARCHITECTURE.md 的槽位契约） |
 | 红点数字不动 | 15s 轮询被拦（网络面板看 `/memory-steward/api/status`）；或页面没刷新 |
 | 点采纳没反应/报错 | 看该条历史里的失败原因（写进提案的 `error` 字段）；对照 selfcheck 的「写入契约」项 |
 | 皮肤下错位 | 检查 `.duc-root`/`position:fixed` 的包含块（backdrop-filter 会让 fixed 以该元素为基准） |

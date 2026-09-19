@@ -52,7 +52,7 @@ function makeMiniReact() {
 function loadClient() {
   let captured = null
   new Function('window', SRC)({ __ModuleLoader__: { load: (m) => { captured = m } } })
-  assert.equal(captured.id, '@dsh-external/dsh-memory-steward')
+  assert.equal(captured.id, 'dsh-memory-steward')
   const mini = makeMiniReact()
   const mod = captured.factory((id) => { if (id === 'react') return mini.React; throw new Error('unexpected require: ' + id) })
   let meta = null, Panel = null

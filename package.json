@@ -1,16 +1,20 @@
 {
-  "name": "@dsh-external/dsh-memory-steward",
-  "version": "0.0.1",
-  "description": "记忆管家：预算看门狗 + 整理计划待审批队列与审批 Tab + 全自动采纳开关（只读不改记忆文件，写入走 memory-evolve 官方 API）",
-  "private": true,
+  "name": "dsh-memory-steward",
+  "version": "0.1.0",
+  "description": "记忆管家：为 dsh-memory-evolve 补上记忆入库之后的生命周期闭环——预算看门狗、整理到期提醒、待审批队列与审批 Tab、带备份执行。只读观测记忆文件，写入一律回调 memory-evolve 官方 HTTP API。",
   "type": "module",
   "main": "./lib/index.js",
-  "types": "./lib/types/index.d.ts",
   "files": [
     "lib",
-    "skills"
+    "skills",
+    "scripts",
+    "test",
+    "docs",
+    "cordis.patch.yml",
+    "TESTING.md",
+    "CHANGELOG.md"
   ],
-  "license": "BSD-3-Clause",
+  "license": "MIT",
   "keywords": [
     "deepseek-harness",
     "dsh",
@@ -20,36 +24,36 @@
     "memory-lifecycle",
     "cordis"
   ],
-  "peerDependencies": {
-    "@deepseek-ai/dsh-llm": ">=0.0.1-rc <2",
-    "@deepseek-ai/dsh-tools": ">=0.0.1-rc <2",
-    "cordis": ">=4.0.0-rc <5",
-    "schemastery": "^3.18.0",
-    "@deepseek-ai/dsh-client-ui-slots": ">=0.0.1-rc <2"
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rezon-aki/dsh-memory-steward.git"
   },
-  "devDependencies": {
-    "@types/node": "^24.13.3",
-    "typescript": "^5.9.0",
-    "tsdown": "^0.22.14"
+  "homepage": "https://github.com/rezon-aki/dsh-memory-steward#readme",
+  "bugs": {
+    "url": "https://github.com/rezon-aki/dsh-memory-steward/issues"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "scripts": {
-    "test": "node --test test/*.test.mjs",
-    "build": "bash scripts/build.sh",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "build:client": "tsdown"
+    "test": "node --test test/*.test.mjs"
   },
   "exports": {
     ".": {
-      "types": "./lib/types/index.d.ts",
       "default": "./lib/index.js"
     },
     "./client": {
-      "types": "./lib/types/client/index.d.ts",
       "default": "./lib/client.js"
     },
     "./package.json": "./package.json"
   },
   "dsh": {
+    "engines": {
+      "dsh": ">=0.1.5-rc.1"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "inject": [
         "@deepseek-ai/dsh-client-runtime",

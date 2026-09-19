@@ -1,63 +1,129 @@
-# dsh-memory-steward（记忆管家）
+# dsh-memory-steward · 记忆管家
 
-给 [dsh-memory-evolve](https://www.npmjs.com/package/dsh-memory-evolve) 补上记忆的**生命周期闭环**：
-它只有「入库闸门」，没有预算、没有淘汰、没有自动触发——管家负责**发现 → 提醒 → 出方案 → 审批 → 执行（带备份）**。
+> 给 [dsh-memory-evolve](https://github.com/csyangwen/dsh-memory-evolve) 补上**记忆入库之后**的那半程：
+> 预算看门狗 → 整理到期提醒 → 模型出方案 → 你在 Tab 审批 → 带备份执行。
 
-插件本身**不调 LLM**：判读由会话里的模型做（与 memory-evolve 的审查机制同构），管家只提供状态、出口和闸门。
+<p>
+  <img src="https://badgen.net/badge/license/MIT/green" alt="MIT license" />
+  <img src="https://badgen.net/badge/format/DSH%20bundle/8257D0" alt="DSH bundle" />
+  <img src="https://badgen.net/badge/tests/31%20passed/green" alt="tests" />
+</p>
 
-## 它做什么
+**前置依赖**：本插件是 memory-evolve 的**伴生治理层**，单独装它没有意义——所有执行都回调它的官方 HTTP API，
+记忆的存储与单写者永远是上游。零代码耦合：只依赖 4 条官方路由（`memory/delete|update|archive`、`memory-files`）与 6 个记忆文件路径。
 
-- **预算看门狗**：memory / user / key 三轨的条数与字节对照预算（固定阈值，或设基准后按 ×1.5 动态），超了才说话。
-- **到期提醒**：超预算**或**归档超过阈值，且没有待审提案、距上次整理 ≥7 天 → 往 systemPrompt 注入一行【整理到期】。
-- **整理提案队列**：`memory_propose` 提交，用户在「整理审批」Tab 勾选**采纳 / 拒绝 / 恢复**，有红点、有历史、可批量。
-- **历史自动清理**：队列只留 pending + 最近 N 条已结项（默认 20 条 / 30 天，两个条件都满足才淘汰，待审永不自动清）；已结项正文精简成备份指针（正文只活在 `backups/`）；另有一份只追加的**事件日志** `history.jsonl`（一行 ≈200 B：摘要 + 失败原因 + 时间戳，不含正文），接住「失败诊断」与「确定性提案去重」两件长期需求。
-- **执行带备份**：一律回调 memory-evolve 官方 HTTP API（带 `origin` 头），每次执行前把 6 个记忆文件整文件备份到 `steward/backups/<提案id>-<ts>/`。
-- **开销审计**：`/api/rounds` 记录每轮盘点次数、≈tokens（盘点输入 + 提案输出，按字符 ÷ 2 估）、提案/ops、执行成功失败与结束原因。
+## 它解决什么问题
 
-**硬边界**：绝不直接改记忆文件；单写者永远是 memory-evolve（它的锁、drift guard、格式校验都在）。
+上游把「记忆入库」做得很完整（五轨 · 审查 · 技能 · 合并规则），但入库之后没人管：
+
+| 你会遇到的问题 | 管家做什么 |
+|---|---|
+| 记忆悄悄涨到超预算，没人告诉你 | 三轨条数/字节对照预算（固定阈值，或设基准后按 ×倍率）；**只在超预算时**往 systemPrompt 注入一行 |
+| 「是不是该整理了」全靠人想起来 | 超预算**或**归档超量 + 距上次整理够天数 + 无待审 → 提醒里直接给出这一轮怎么跑（轻量模式先跑归档预筛，省 token） |
+| 整理方案靠会话临场发挥，判完就散 | `memory_propose` 提交成**待审批队列**：红点、勾选/全选/反选/批量采纳、拒绝、恢复待审 |
+| 改错了回不去 | 每次执行前把 6 个记忆文件**整份备份**；失败可断点续跑（已成功的 op 不重放） |
+| 提案正文与执行回显把队列文件撑爆 | 三层治理：队列只留 pending + 最近 N 条已结项；正文只活在队列与 `backups/`；另有只追加的事件日志（一行 ≈200 B，含摘要与失败原因，不含正文） |
+
+**实测**（本机 13 条历史）：`proposals.json` **147,788 → 13,855 B**；Tab 每 15s 轮询的列表接口 **138,849 → 5,934 B**。
+
+<!-- 首次发布建议补一张 Tab 截图放 docs/images/steward-tab.png，并在这里引用 -->
 
 ## 安装
 
-需要先装 `dsh-memory-evolve`（管家是它的伴生插件，不重复实现存储）。
-
 ```bash
-dsh plugin --profile web add <本包目录或 npm 包名>
-# 重启 profile 生效
+# 1. 先装伴生插件（记忆的存储与单写者）
+dsh plugin --profile web add github:csyangwen/dsh-memory-evolve
+
+# 2. 再装管家
+dsh plugin --profile web add github:rezon-aki/dsh-memory-steward
+# 发布到 npm 之后也可以：dsh plugin --profile web add dsh-memory-steward
 ```
 
-开发期用 dsh-super-injector 注入：`dev_inject_plugin <本目录>`，改完 `dev_reload_package dsh-memory-steward`（**无需构建**，见下）。
+重启 `dsh web` 即生效（`cordis.patch.yml` 由 bundle 清单自动注册，**不要**再手动 insert 同 id）。
+会话视图会多出「整理审批」Tab；有待审时标题带 🔴 计数。
 
-## 它长什么样
+## Tab 里有什么
 
-- **工具**：`memory_audit`（库存/预算/候选簇/归档预筛/条目清单）、`memory_propose`（提案，支持 `proposals` 数组批量 ≤20 条）、`memory_sweep_status`（到期查询与计时复位）。
-- **Tab**：会话视图里的「整理审批」——配置区、库存预算、整理开销、待审列表（勾选/全选/反选/批量）、历史。
-- **HTTP**（同一 webServer，带 Host/Origin 围栏）：`/memory-steward/api/{status,proposals,rounds,scan,config,baseline,propose,selfcheck,history/clear,proposals/approve|reject|restore|purge}`。
-  - `GET /api/proposals`：**只回轻量字段**（无正文，13 条 ≈5.9 KB，Tab 每 15s 轮询的就是它）；`GET /api/proposals/:id` 按需取完整 ops。
-  - `POST /api/history/clear {days:N}` 或 `{all:true}`：清理事件日志（不动队列与记忆）。
-  - `GET /api/selfcheck`：内核契约 + 伴生插件 + 自身状态逐项 PASS/FAIL（`node scripts/selfcheck.mjs`）。
-  - `POST /api/propose`：与工具同一条实现，供脚本/夹具无模型造提案（key 轨需带 `cwd`）。
-- **技能随包**：`skills/memory-hygiene/SKILL.md` 是整理规则的真源，插件 `apply()` 时同步到 `~/.dsh/skills/memory-hygiene/SKILL.md`（内容不同即覆写），`/api/status` 的 `skill` 字段回报 `installed/updated/unchanged/error`。
+- **库存与预算**：三轨条数/字节 vs 预算、最老条目、到期状态（超预算/归档超量/距上次整理）
+- **待审批列表**：勾选、全选/反选、批量采纳/拒绝；「▸ 查看详细」**展开时才按需拉正文**（原记忆 → 修改后）
+- **历史**：保留策略与「已淘汰/已精简」计数、单条删除记录、清空历史、清理事件日志（留 7 天 / 清空，都带 confirm）
+- **整理开销**：最近 N 轮的 ≈tokens（盘点输入 + 提案输出），超目标标红
+- **配置区**：自动检查 / 注入提醒 / 轻量模式 / 整理间隔 / 归档阈值 / 预算倍率 / 审计保留轮数 / 历史保留（条数·天数·精简）/ 自动采纳
+
+## 三个工具
+
+| 工具 | 用途 |
+|---|---|
+| `memory_audit` | 库存/预算/候选簇/归档预筛/条目清单。`deep` 跑上游扫描器；`archiveCheck` 归档预筛（三桶：疑似已收录/归档独占/待判，最省 token）；`track:'all'` 一次拉全量 |
+| `memory_propose` | 提交提案（单条或 `proposals` 数组批量 ≤20 条）：`archive` / `remove` / `replace` / `purge`。`match` 只需唯一子串，host 解析成整条正文 |
+| `memory_sweep_status` | 到期查询（`check`）与计时复位（`complete`） |
+
+## 安全边界
+
+- **绝不直接写记忆文件**：写入一律走 memory-evolve 官方 HTTP API（带 `origin` 头）；单写者永远是它。
+- **执行锁**：每条提案同时只跑一次——并发/重复提交会被挡掉（曾因批量按钮双击造成「已成功却标 failed」）。
+- **提案期校验**：`replace` 的新正文不能为空、不能含条目分隔符 `§`（等到审批才炸太晚）。
+- **一键自检**：`node scripts/selfcheck.mjs` → 技能同步 / 状态目录可写 / 客户端 bundle 组合 / 上游写入契约 / 上游存活 / 工具注册 / 队列可读，逐项 PASS-FAIL。**缺上游时报 FAIL，而不是静默失灵。**
+
+## 成本
+
+插件本身**不调 LLM**——判读由会话里的模型做。一轮整理的开销 = 盘点清单（输入）+ 提案正文（输出），按字符 ÷2 估算，
+常规轮次目标 **≤2K tokens**（合并类 `replace` 要把新旧正文都写进 ops，一轮大重构 10K+ 属正常）。
+`/api/rounds` 与 Tab 的「整理开销」卡片同口径。
 
 ## 配置
 
-Tab 里改，落盘在 `<memoryDir>/steward/config.json`：
-`autoCheck`（12h 定时 + 回合末刷新）、`nudge`（注入提醒）、`lightMode`、`sweepIntervalDays`、`archiveMaxEntries`、`budgetRatio`、`roundKeep`、`autoApprove`、`baseline`、`historyKeep`（20 条）、`historyKeepDays`（30 天）、`historySlim`（已结项精简正文）。
-**纯手动模式** = `autoCheck:false + nudge:false`（Tab 一键），此后只有工具/API 调用才刷新、才产提案。
+Tab 里改，落盘在 `<memoryDir>/steward/config.json`（默认 `~/.dsh/memories/steward/config.json`）：
 
-运行数据都在 `<memoryDir>/steward/`：`proposals.json`（队列）、`history.jsonl`（事件日志，只追加）、`config.json`、`rounds.json`、`backups/`（执行前的整份文件）。卸载插件不会删它们。
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `autoCheck` | true | 自动检查：12h 定时 + 回合末刷新库存 |
+| `nudge` | true | 超预算/到期时往 systemPrompt 注入一行提醒 |
+| `lightMode` | true | 提醒里优先建议 `archiveCheck` + `deep`，候选多再拉全量 |
+| `sweepIntervalDays` | 7 | 距上次整理够多少天才再次提醒 |
+| `archiveMaxEntries` | 30 | 归档轨条数阈值（超过也视为「该做一轮」） |
+| `budgetRatio` | 1.5 | 设基准后：预算 = max(固定阈值, ⌈基准 × 该值⌉) |
+| `roundKeep` | 10 | 开销审计滚动保留轮数 |
+| `historyKeep` | 20 | 队列保留最近 N 条已结项 |
+| `historyKeepDays` | 30 | 已结项早于 M 天才可能被淘汰/精简（与 N 取「且」） |
+| `historySlim` | true | 已结项正文精简（有备份即精简，正文只留 `backups/`） |
+| `autoApprove` | off | `off` / `deterministic`（只自动跑确定性归档）/ `all` |
+| `baseline` | null | 预算基准快照；设了就用「基准 ×倍率」而非固定阈值 |
+
+**纯手动模式** = `autoCheck:false` + `nudge:false`（Tab 一键）：此后只有工具/API 调用才刷新、才产提案。
+
+## HTTP API
+
+同一 webServer，带 Host/Origin 围栏（跨站请求 403）：
+
+| 路由 | 说明 |
+|---|---|
+| `GET /api/status` | 库存、预算、到期状态、历史统计、技能同步状态、客户端 bundle 路径 |
+| `GET /api/proposals` | **轻量列表**（不含 ops/results 正文）；`GET /api/proposals/:id` 按需取完整 ops |
+| `POST /api/proposals/{approve,reject,restore,purge}` | 审批动作（空 ids 的 purge = 清空历史，待审保留） |
+| `POST /api/propose` / `POST /api/scan` | 外部提交提案 / 跑确定性重复检测 |
+| `POST /api/config` / `POST /api/baseline` | 改配置 / 设或清预算基准 |
+| `GET /api/rounds` | 整理开销审计 |
+| `GET /api/selfcheck` | 自检（同 `scripts/selfcheck.mjs`） |
+| `POST /api/history/clear` | 事件日志：`{days:N}` 删 N 天前、`{all:true}` 整文件删（只删日志） |
 
 ## 开发
 
-**没有构建步骤**：`lib/index.js`（host，ESM）与 `lib/client.js`（client，`window.__ModuleLoader__.load` 包装的 CJS）就是源码，改完注入即生效。仓库里的 `src/`、`tsconfig.json`、`tsdown.config.ts`、`scripts/build.sh` 是脚手架残留，未参与发布，待清理。
+**无构建步骤**：`lib/index.js`（host，ESM）与 `lib/client.js`（client，`window.__ModuleLoader__.load` 包装的 CJS）就是源码。
 
 ```bash
-npm test          # node --test，无需安装依赖（Node ≥ 20）
+npm test                     # 31 例，node --test，不需要安装任何依赖（Node ≥ 20）
+node scripts/selfcheck.mjs   # 对运行中的实例逐项自检（加 --json 看原始返回）
+node scripts/fixture.mjs seed|status|clear   # 造/查/清浏览器验收夹具（原样重写，不改语义）
 ```
 
-测试见 `test/`：假 ctx + 临时记忆目录 + 一个同时扮演管家 API 与 memory-evolve API 的本地 HTTP 服务，覆盖预算/到期判定、归档预筛分桶、提案解析、执行与备份、轮次记账、Origin 围栏、技能同步、自检项，以及客户端面板的渲染冒烟。
+测试用三件套：假 ctx（收集注册的工具/路由/提示词）+ 临时记忆库 + 一个同时扮演管家 API 与 memory-evolve API 的本地服务；
+客户端测试用迷你 React 把 `lib/client.js` 当浏览器 bundle 渲染，并断言「展开详情确实按需请求」。
 
-自动化覆盖不到的（真实浏览器点击、真实后端语义、内核升级、长期质量）见 **[TESTING.md](TESTING.md)** —— 那里是给人执行的清单：`scripts/selfcheck.mjs` 一键自检、`scripts/fixture.mjs seed|clear` 造/清浏览器验收夹具。
+- 设计文档：[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- 人机分工的验收清单：[TESTING.md](TESTING.md)
+- 变更记录：[CHANGELOG.md](CHANGELOG.md)
 
 ## 许可
 
-BSD-3-Clause（`package.json` 声明的脚手架默认值；发布前待定，生态多为 MIT）。
+MIT。伴生插件 [dsh-memory-evolve](https://github.com/csyangwen/dsh-memory-evolve) 亦为 MIT。
