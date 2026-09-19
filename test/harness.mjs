@@ -50,6 +50,7 @@ export function makeCtx() {
 
 /** 同时扮演管家路由与 memory-evolve 写入接口；写调用记进 calls。 */
 export async function startServer(routes, calls = []) {
+  const failOnce = new Set()   // 命中这些 url 的调用失败一次（验证断点续跑/重试）
   const server = createServer((req, res) => {
     const url = req.url || '/'
     if (url.startsWith('/memory-evolve/')) {
@@ -60,6 +61,7 @@ export async function startServer(routes, calls = []) {
         try { parsed = JSON.parse(body || '{}') } catch { /* 保留 null */ }
         calls.push({ method: req.method, url, body: parsed, origin: req.headers.origin })
         res.setHeader('content-type', 'application/json')
+        if (failOnce.has(url)) { failOnce.delete(url); res.statusCode = 500; res.end(JSON.stringify({ ok: false, message: '模拟外部失败' })); return }
         res.end(JSON.stringify({ ok: true }))
       })
       return
@@ -70,7 +72,7 @@ export async function startServer(routes, calls = []) {
   })
   await new Promise((r) => server.listen(0, '127.0.0.1', r))
   const port = server.address().port
-  return { server, port, base: 'http://127.0.0.1:' + port, calls, close: () => new Promise((r) => server.close(r)) }
+  return { server, port, base: 'http://127.0.0.1:' + port, calls, failOnce, close: () => new Promise((r) => server.close(r)) }
 }
 
 /** 工具调用用的 exec 上下文（模拟会话头）。 */

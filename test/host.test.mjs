@@ -259,3 +259,62 @@ test('HTTP 提案口：与工具同一条实现（唯一子串→整条正文；
     assert.match(bad.body.message, /找不到匹配条目/)
   } finally { await s.teardown() }
 })
+test('提案期就拦住非法新正文：含 § 直接拒绝，不留到审批才炸', async () => {
+  const s = await setup()
+  try {
+    const bad = await s.tool('memory_propose', { summary: '含分隔符', reason: 'x', ops: [{ op: 'replace', target: 'memory', match: '全局记忆条目 1：', content: '正文里带了 § 符号' }] })
+    assert.equal(bad.ok, false)
+    assert.match(bad.message, /不能包含 §/)
+    const empty = await s.tool('memory_propose', { summary: '空正文', reason: 'x', ops: [{ op: 'replace', target: 'memory', match: '全局记忆条目 1：', content: '   ' }] })
+    assert.equal(empty.ok, false)
+    assert.match(empty.message, /需要 content/)
+    assert.equal((await getJson(s.srv.base, '/memory-steward/api/proposals')).body.items.length, 0)
+  } finally { await s.teardown() }
+})
+
+test('执行可续跑：中途失败后重试，已成功的 op 不重放', async () => {
+  const s = await setup()
+  try {
+    const p = await s.tool('memory_propose', {
+      summary: '两段式', reason: 'x',
+      ops: [
+        { op: 'replace', target: 'memory', match: '全局记忆条目 1：', content: '全局记忆条目 1：已改写' },
+        { op: 'archive', target: 'memory', match: '全局记忆条目 2：' },
+      ],
+    })
+    assert.equal(p.ok, true)
+    const id = (await getJson(s.srv.base, '/memory-steward/api/proposals')).body.items[0].id
+    s.srv.failOnce.add('/memory-evolve/api/memory/archive')          // 第 2 个 op 失败一次
+    const first = await postJson(s.srv.base, '/memory-steward/api/proposals/approve', { ids: [id] })
+    assert.equal(first.body.results[0].ok, false)
+    let item = (await getJson(s.srv.base, '/memory-steward/api/proposals')).body.items[0]
+    assert.equal(item.status, 'failed')
+    assert.equal(item.results.length, 2)
+    assert.equal(item.results[0].ok, true)                            // 第 1 个 op 已成功
+    const updates = s.srv.calls.filter((c) => c.url.endsWith('/memory/update')).length
+    assert.equal(updates, 1)
+    const second = await postJson(s.srv.base, '/memory-steward/api/proposals/approve', { ids: [id] })
+    assert.equal(second.body.results[0].ok, true, '重试应从失败的 op 续跑并成功')
+    item = (await getJson(s.srv.base, '/memory-steward/api/proposals')).body.items[0]
+    assert.equal(item.status, 'applied')
+    assert.equal(s.srv.calls.filter((c) => c.url.endsWith('/memory/update')).length, 1, '已成功的 op 不能被重放')
+    assert.equal(s.srv.calls.filter((c) => c.url.endsWith('/memory/archive')).length, 2, '归档只该在第二次真正执行')
+  } finally { await s.teardown() }
+})
+
+test('并发重复提交同一提案：只执行一次，另一次被挡', async () => {
+  const s = await setup()
+  try {
+    await s.tool('memory_propose', { summary: '并发', reason: 'x', ops: [{ op: 'purge', target: 'archive-key', match: 'ALPHA-UNIQUE' }] })
+    const id = (await getJson(s.srv.base, '/memory-steward/api/proposals')).body.items[0].id
+    const [a, b] = await Promise.all([
+      postJson(s.srv.base, '/memory-steward/api/proposals/approve', { ids: [id] }),
+      postJson(s.srv.base, '/memory-steward/api/proposals/approve', { ids: [id] }),
+    ])
+    const oks = [a, b].filter((r) => r.body.results[0].ok).length
+    assert.equal(oks, 1, '两次并发只该有一次成功')
+    assert.equal(s.srv.calls.length, 1, '真实删除只该发一次')
+    const item = (await getJson(s.srv.base, '/memory-steward/api/proposals')).body.items[0]
+    assert.equal(item.status, 'applied')
+  } finally { await s.teardown() }
+})

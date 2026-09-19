@@ -84,6 +84,21 @@ function loadClient() {
     runEffects: mini.runEffects,               // 跑 useEffect（拉真实数据）
     cleanups: [],                              // useEffect 的清理函数（15s 轮询定时器在这）
     text: () => collect(mini.render(Panel, {})).join(' '),
+    /** 找到文本含 fragment 且带 onClick 的最内层节点并点下去（模拟用户点按）。 */
+    click: (fragment) => {
+      let fired = false
+      const scan = (n) => {
+        if (fired || n === null || n === undefined || typeof n === 'boolean') return
+        if (typeof n === 'string' || typeof n === 'number') return
+        if (Array.isArray(n)) { for (const c of n) scan(c); return }
+        if (typeof n !== 'object') return
+        const kids = typeof n.type === 'function' ? mini.expand(n) : n.children
+        if (n.props && typeof n.props.onClick === 'function' && collect(kids).join(' ').includes(fragment)) { n.props.onClick(); fired = true; return }
+        scan(kids)
+      }
+      scan(mini.render(Panel, {}))
+      return fired
+    },
     dispose: () => {
       for (const d of disposes.concat(api.cleanups)) { try { if (typeof d === 'function') d() } catch { /* 已失效 */ } }
       disposes.length = 0
@@ -128,9 +143,11 @@ test('client：面板对真实服务渲染不抛异常，开销与待审行都�
     await host.tools.get('memory_audit').execute({ track: 'memory' }, execOf(mem.cwd))
     await host.tools.get('memory_propose').execute(
       { summary: '待审样例', reason: 'S 已收录', ops: [{ op: 'purge', target: 'archive-key', match: 'UNIQ-X' }] }, execOf(mem.cwd))
+    await host.tools.get('memory_propose').execute(
+      { summary: '合并样例', reason: 'M 可合并', ops: [{ op: 'replace', target: 'memory', match: '全局记忆条目一', content: '全局记忆条目一（已改写）' }] }, execOf(mem.cwd))
 
     client.render(client.Panel, {})                       // 首帧：加载中
-    const { text } = await renderUntil(client, (t) => t.includes('待审样例'))
+    const { text } = await renderUntil(client, (t) => t.includes('合并样例'))
 
     assert.match(text, /整理开销/)
     assert.match(text, /≈tokens = 盘点清单（输入）\+ 提案正文（输出）/)
@@ -138,6 +155,16 @@ test('client：面板对真实服务渲染不抛异常，开销与待审行都�
     assert.match(text, /待审样例/)                        // 待审提案进了列表（子组件渲染）
     assert.match(text, /S 已收录/)                        // reason 也渲染
     assert.equal(typeof client.meta.label(), 'string')
+    // 详情默认收起，点开后能看到「原记忆 → 修改后」
+    assert.match(text, /▸ 查看详细/)
+    assert.doesNotMatch(text, /修改后/)
+    assert.equal(client.click('查看详细'), true, '应能找到详情的展开按钮')
+    const detail = client.text()
+    assert.match(detail, /▾ 收起/)
+    assert.match(detail, /合并重写/)
+    assert.match(detail, /原记忆（将被新正文替换）/)
+    assert.match(detail, /全局记忆条目一（已改写）/)      // 修改后的正文
+    assert.match(detail, /原记忆（将被新正文替换）\s*\[2026-09-01\] 全局记忆条目一\s+修改后/)   // 原记忆正文紧跟在标签后
   })
 })
 
