@@ -99,8 +99,9 @@ test('提案解析：唯一子串换成整条正文；歧义/无匹配都拒绝'
     assert.equal(ok.ok, true)
     const list = await getJson(s.srv.base, '/memory-steward/api/proposals')
     const p = list.body.items.find((i) => i.summary === '清运 ALPHA')
-    assert.equal(p.ops[0].match, '[2026-09-03] key 归档条目一：含唯一串 ALPHA-UNIQUE 的历史细节')
     assert.equal(p.track, 'archive-key')
+    const one = await getJson(s.srv.base, '/memory-steward/api/proposals/' + p.id)   // 正文只在详情接口
+    assert.equal(one.body.item.ops[0].match, '[2026-09-03] key 归档条目一：含唯一串 ALPHA-UNIQUE 的历史细节')
     const bad = await s.tool('memory_propose', { summary: '歧义', reason: 'x', ops: [{ op: 'purge', target: 'archive-key', match: '唯一串' }] })
     assert.equal(bad.ok, false)
     assert.match(bad.message, /匹配到 2 条/)
@@ -252,8 +253,9 @@ test('HTTP 提案口：与工具同一条实现（唯一子串→整条正文；
     assert.equal(r.body.ids.length, 1)
     assert.equal(r.body.pending, 1)
     const p = (await getJson(s.srv.base, '/memory-steward/api/proposals')).body.items[0]
-    assert.equal(p.ops[0].match, '[2026-09-03] key 归档条目一：含唯一串 ALPHA-UNIQUE 的历史细节')
     assert.equal(p.source, 'api')
+    const one = await getJson(s.srv.base, '/memory-steward/api/proposals/' + p.id)
+    assert.equal(one.body.item.ops[0].match, '[2026-09-03] key 归档条目一：含唯一串 ALPHA-UNIQUE 的历史细节')
     const bad = await postJson(s.srv.base, '/memory-steward/api/propose', { cwd: s.mem.cwd, summary: 'x', reason: 'y', ops: [{ op: 'purge', target: 'archive-key', match: '根本不存在' }] })
     assert.equal(bad.status, 400)
     assert.match(bad.body.message, /找不到匹配条目/)
@@ -287,15 +289,16 @@ test('执行可续跑：中途失败后重试，已成功的 op 不重放', asyn
     s.srv.failOnce.add('/memory-evolve/api/memory/archive')          // 第 2 个 op 失败一次
     const first = await postJson(s.srv.base, '/memory-steward/api/proposals/approve', { ids: [id] })
     assert.equal(first.body.results[0].ok, false)
-    let item = (await getJson(s.srv.base, '/memory-steward/api/proposals')).body.items[0]
+    let item = (await getJson(s.srv.base, '/memory-steward/api/proposals/' + id)).body.item
     assert.equal(item.status, 'failed')
     assert.equal(item.results.length, 2)
     assert.equal(item.results[0].ok, true)                            // 第 1 个 op 已成功
+    assert.deepEqual(Object.keys(item.results[0]).sort(), ['message', 'ok', 'op'])   // 瘦身：不再存 result 回显
     const updates = s.srv.calls.filter((c) => c.url.endsWith('/memory/update')).length
     assert.equal(updates, 1)
     const second = await postJson(s.srv.base, '/memory-steward/api/proposals/approve', { ids: [id] })
     assert.equal(second.body.results[0].ok, true, '重试应从失败的 op 续跑并成功')
-    item = (await getJson(s.srv.base, '/memory-steward/api/proposals')).body.items[0]
+    item = (await getJson(s.srv.base, '/memory-steward/api/proposals/' + id)).body.item
     assert.equal(item.status, 'applied')
     assert.equal(s.srv.calls.filter((c) => c.url.endsWith('/memory/update')).length, 1, '已成功的 op 不能被重放')
     assert.equal(s.srv.calls.filter((c) => c.url.endsWith('/memory/archive')).length, 2, '归档只该在第二次真正执行')

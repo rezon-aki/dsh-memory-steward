@@ -131,9 +131,10 @@ async function withPanel(memSpec, run) {
   const host = makeCtx()
   hostApply(host.ctx, { memoryDir: mem.root, autoCheck: false })
   const srv = await startServer(host.routes)
-  globalThis.fetch = (p, init) => realFetch(srv.base + p, init)
+  const reqs = []                                                        // 记录面板发出的请求（验「按需」）
+  globalThis.fetch = (p, init) => { reqs.push(String(p)); return realFetch(srv.base + p, init) }
   const client = loadClient()
-  try { await run({ mem, host, srv, client }) }
+  try { await run({ mem, host, srv, client, reqs }) }
   finally {
     client.dispose(); await srv.close(); host.dispose(); delete process.env.DSH_HOME
     globalThis.fetch = realFetch
@@ -142,7 +143,7 @@ async function withPanel(memSpec, run) {
 }
 
 test('client：面板对真实服务渲染不抛异常，开销与待审行都渲染', async () => {
-  await withPanel({ memory: [entry('2026-09-01', '全局记忆条目一')], keyArchive: [entry('2026-09-03', 'key 归档：唯一串 UNIQ-X 的历史细节')] }, async ({ mem, host, srv, client }) => {
+  await withPanel({ memory: [entry('2026-09-01', '全局记忆条目一')], keyArchive: [entry('2026-09-03', 'key 归档：唯一串 UNIQ-X 的历史细节')] }, async ({ mem, host, srv, client, reqs }) => {
     await host.tools.get('memory_audit').execute({ track: 'memory' }, execOf(mem.cwd))
     await host.tools.get('memory_propose').execute(
       { summary: '待审样例', reason: 'S 已收录', ops: [{ op: 'purge', target: 'archive-key', match: 'UNIQ-X' }] }, execOf(mem.cwd))
@@ -158,11 +159,15 @@ test('client：面板对真实服务渲染不抛异常，开销与待审行都�
     assert.match(text, /待审样例/)                        // 待审提案进了列表（子组件渲染）
     assert.match(text, /S 已收录/)                        // reason 也渲染
     assert.equal(typeof client.meta.label(), 'string')
-    // 详情默认收起，点开后能看到「原记忆 → 修改后」
+    // 详情默认收起；列表不带正文，展开时才按需拉详情
+    const detailReqs = () => reqs.filter((u) => /\/api\/proposals\/p\d+$/.test(u)).length
     assert.match(text, /▸ 查看详细/)
     assert.doesNotMatch(text, /修改后/)
+    assert.equal(detailReqs(), 0, '没展开就不该请求详情')
     assert.equal(client.click('查看详细'), true, '应能找到详情的展开按钮')
-    const detail = client.text()
+    assert.match(client.text(), /加载详情…/)                       // 展开先给加载态
+    const detail = (await renderUntil(client, (t) => t.includes('修改后'), '按需拉取的详情')).text
+    assert.equal(detailReqs(), 1, '展开时确实按需请求了详情')
     assert.match(detail, /▾ 收起/)
     assert.match(detail, /合并重写/)
     assert.match(detail, /原记忆（将被新正文替换）/)
