@@ -220,3 +220,42 @@ test('没有 memory-evolve 扫描器时优雅降级：/api/scan 不崩，错误�
     assert.match(String(st.lastError), /未找到上游 scan_memory\.mjs/)
   } finally { await s.teardown() }
 })
+test('自检接口：逐项给 PASS/FAIL，外部依赖缺失也不抛错', async () => {
+  const s = await setup()
+  try {
+    const r = await getJson(s.srv.base, '/memory-steward/api/selfcheck')
+    assert.equal(r.status, 200)
+    const by = Object.fromEntries(r.body.checks.map((c) => [c.name, c]))
+    for (const c of r.body.checks) {
+      assert.equal(typeof c.name, 'string')
+      assert.equal(typeof c.ok, 'boolean')
+      assert.equal(typeof c.detail, 'string')
+    }
+    assert.equal(r.body.checks.length, 7)
+    assert.equal(by['技能随包同步'].ok, true)          // 本地必过项
+    assert.equal(by['状态目录可写'].ok, true)
+    assert.equal(by['工具注册'].ok, true)
+    assert.equal(by['提案队列可读'].ok, true)
+    assert.equal(by['客户端 bundle 已组合'].ok, false)  // 测试 ctx 没有 clientModules
+    assert.equal(by['memory-evolve 写入契约'].ok, false) // 测试环境没装伴生插件（自检要报出来而不是崩）
+  } finally { await s.teardown() }
+})
+
+test('HTTP 提案口：与工具同一条实现（唯一子串→整条正文；解析失败 400）', async () => {
+  const s = await setup()
+  try {
+    const r = await postJson(s.srv.base, '/memory-steward/api/propose', {
+      cwd: s.mem.cwd,                                   // key/archive-key 目标：无会话时显式给 cwd
+      summary: '夹具提案', reason: 'S 已收录', ops: [{ op: 'purge', target: 'archive-key', match: 'ALPHA-UNIQUE' }],
+    })
+    assert.equal(r.status, 200)
+    assert.equal(r.body.ids.length, 1)
+    assert.equal(r.body.pending, 1)
+    const p = (await getJson(s.srv.base, '/memory-steward/api/proposals')).body.items[0]
+    assert.equal(p.ops[0].match, '[2026-09-03] key 归档条目一：含唯一串 ALPHA-UNIQUE 的历史细节')
+    assert.equal(p.source, 'api')
+    const bad = await postJson(s.srv.base, '/memory-steward/api/propose', { cwd: s.mem.cwd, summary: 'x', reason: 'y', ops: [{ op: 'purge', target: 'archive-key', match: '根本不存在' }] })
+    assert.equal(bad.status, 400)
+    assert.match(bad.body.message, /找不到匹配条目/)
+  } finally { await s.teardown() }
+})

@@ -30,7 +30,9 @@ dsh plugin --profile web add <本包目录或 npm 包名>
 
 - **工具**：`memory_audit`（库存/预算/候选簇/归档预筛/条目清单）、`memory_propose`（提案，支持 `proposals` 数组批量 ≤20 条）、`memory_sweep_status`（到期查询与计时复位）。
 - **Tab**：会话视图里的「整理审批」——配置区、库存预算、整理开销、待审列表（勾选/全选/反选/批量）、历史。
-- **HTTP**（同一 webServer，带 Host/Origin 围栏）：`/memory-steward/api/{status,proposals,rounds,scan,config,baseline,proposals/approve|reject|restore|purge}`。
+- **HTTP**（同一 webServer，带 Host/Origin 围栏）：`/memory-steward/api/{status,proposals,rounds,scan,config,baseline,propose,selfcheck,proposals/approve|reject|restore|purge}`。
+  - `GET /api/selfcheck`：内核契约 + 伴生插件 + 自身状态逐项 PASS/FAIL（`node scripts/selfcheck.mjs`）。
+  - `POST /api/propose`：与工具同一条实现，供脚本/夹具无模型造提案（key 轨需带 `cwd`）。
 - **技能随包**：`skills/memory-hygiene/SKILL.md` 是整理规则的真源，插件 `apply()` 时同步到 `~/.dsh/skills/memory-hygiene/SKILL.md`（内容不同即覆写），`/api/status` 的 `skill` 字段回报 `installed/updated/unchanged/error`。
 
 ## 配置
@@ -49,7 +51,9 @@ Tab 里改，落盘在 `<memoryDir>/steward/config.json`：
 npm test          # node --test，无需安装依赖（Node ≥ 20）
 ```
 
-测试见 `test/`：假 ctx + 临时记忆目录 + 一个同时扮演管家 API 与 memory-evolve API 的本地 HTTP 服务，覆盖预算/到期判定、归档预筛分桶、提案解析、执行与备份、轮次记账、Origin 围栏、技能同步，以及客户端面板的渲染冒烟。
+测试见 `test/`：假 ctx + 临时记忆目录 + 一个同时扮演管家 API 与 memory-evolve API 的本地 HTTP 服务，覆盖预算/到期判定、归档预筛分桶、提案解析、执行与备份、轮次记账、Origin 围栏、技能同步、自检项，以及客户端面板的渲染冒烟。
+
+自动化覆盖不到的（真实浏览器点击、真实后端语义、内核升级、长期质量）见 **[TESTING.md](TESTING.md)** —— 那里是给人执行的清单：`scripts/selfcheck.mjs` 一键自检、`scripts/fixture.mjs seed|clear` 造/清浏览器验收夹具。
 
 ## 许可
 
