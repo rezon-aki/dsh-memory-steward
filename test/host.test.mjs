@@ -347,3 +347,46 @@ test('历史清理：按 id 删单条；空 ids 清空全部历史但不动待�
     assert.equal(s.srv.calls.length, 0, '清记录不该碰记忆')
   } finally { await s.teardown() }
 })
+
+test('审批期间条目被改写：执行时按锚点重解析，不再因精等失败', async () => {
+  const s = await setup()
+  try {
+    await s.tool('memory_propose', { summary: '归档改写条目', reason: 'A 低价值', ops: [{ op: 'archive', target: 'memory', match: '全局记忆条目 3：' }] })
+    const id = (await getJson(s.srv.base, '/memory-steward/api/proposals')).body.items[0].id
+    // 审批前该条被别的会话改写（锚点子串保留）：旧实现把冻结的旧整条发给上游 → not found
+    const file = s.mem.files.memory
+    writeFileSync(file, readFileSync(file, 'utf8').replace('全局记忆条目 3：内容各不相同', '全局记忆条目 3：内容已被别的会话改写'))
+    const res = await postJson(s.srv.base, '/memory-steward/api/proposals/approve', { ids: [id] })
+    assert.equal(res.body.results[0].ok, true)
+    assert.equal(s.srv.calls.at(-1).body.match, '[2026-09-01] 全局记忆条目 3：内容已被别的会话改写', '应按锚点重解析成当前正文')
+    const item = (await getJson(s.srv.base, '/memory-steward/api/proposals/' + id)).body.item
+    assert.match(item.results[0].message, /按锚点重解析/)
+  } finally { await s.teardown() }
+})
+
+test('单条 op 失败不再中止整条提案：后续 op 照跑，重试只补失败的那个', async () => {
+  const s = await setup()
+  try {
+    await s.tool('memory_propose', {
+      summary: '三段式', reason: 'x',
+      ops: [
+        { op: 'archive', target: 'memory', match: '全局记忆条目 4：' },
+        { op: 'archive', target: 'memory', match: '全局记忆条目 5：' },
+        { op: 'archive', target: 'memory', match: '全局记忆条目 6：' },
+      ],
+    })
+    const id = (await getJson(s.srv.base, '/memory-steward/api/proposals')).body.items[0].id
+    s.srv.failOnce.add('/memory-evolve/api/memory/archive')          // 第 1 个 op 失败一次
+    const first = await postJson(s.srv.base, '/memory-steward/api/proposals/approve', { ids: [id] })
+    assert.equal(first.body.results[0].ok, false)
+    const item = (await getJson(s.srv.base, '/memory-steward/api/proposals/' + id)).body.item
+    assert.equal(item.status, 'failed')
+    assert.equal(item.results.length, 3, '第 1 个失败不该中止后面两个')
+    assert.deepEqual(item.results.map((r) => r.ok), [false, true, true])
+    const archives = () => s.srv.calls.filter((c) => c.url.endsWith('/memory/archive')).length
+    assert.equal(archives(), 3)
+    const second = await postJson(s.srv.base, '/memory-steward/api/proposals/approve', { ids: [id] })
+    assert.equal(second.body.results[0].ok, true)
+    assert.equal(archives(), 4, '重试只补跑失败的那个 op')
+  } finally { await s.teardown() }
+})
