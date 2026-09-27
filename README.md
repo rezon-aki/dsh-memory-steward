@@ -2,6 +2,8 @@
 
 [中文](README.md) · [English](README.en.md)
 
+> ⚠️ **已放弃使用记忆插件路线，转为使用文档管理路线（[dsh-doc-kit](https://github.com/rezon-aki/dsh-doc-kit)）。**
+
 > 给 [dsh-memory-evolve](https://github.com/csyangwen/dsh-memory-evolve) 补上**记忆入库之后**的那半程：
 > 预算看门狗 → 整理到期提醒 → 模型出方案 → 你在 Tab 审批 → 带备份执行。
 

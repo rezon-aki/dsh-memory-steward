@@ -2,6 +2,8 @@
 
 [中文](README.md) · English
 
+> ⚠️ **The memory-plugin route has been abandoned; we have moved to the documentation-management route ([dsh-doc-kit](https://github.com/rezon-aki/dsh-doc-kit)).**
+
 > The missing **second half** of [dsh-memory-evolve](https://github.com/csyangwen/dsh-memory-evolve):
 > budget watchdog → consolidation-due nudge → the model drafts a plan → you approve it in a Tab → execution with backups.
 
