@@ -1,12 +1,14 @@
 # dsh-memory-steward · 记忆管家
 
+[中文](README.md) · [English](README.en.md)
+
 > 给 [dsh-memory-evolve](https://github.com/csyangwen/dsh-memory-evolve) 补上**记忆入库之后**的那半程：
 > 预算看门狗 → 整理到期提醒 → 模型出方案 → 你在 Tab 审批 → 带备份执行。
 
 <p>
   <img src="https://badgen.net/badge/license/MIT/green" alt="MIT license" />
   <img src="https://badgen.net/badge/format/DSH%20bundle/8257D0" alt="DSH bundle" />
-  <img src="https://badgen.net/badge/tests/31%20passed/green" alt="tests" />
+  <img src="https://badgen.net/badge/tests/33%20passed/green" alt="tests" />
 </p>
 
 **前置依赖**：本插件是 memory-evolve 的**伴生治理层**，单独装它没有意义——所有执行都回调它的官方 HTTP API，
@@ -47,6 +49,32 @@ dsh plugin --profile web add github:rezon-aki/dsh-memory-steward
 重启 `dsh web` 即生效（`cordis.patch.yml` 由 bundle 清单自动注册，**不要**再手动 insert 同 id）。
 会话视图会多出「整理审批」Tab；有待审时标题带 🔴 计数。
 
+## 配套补丁：别让「整理动作」写进记忆
+
+上游有两处会让**整理意图**变成**记忆条目**（回执），永久占注入预算——本机实测 48 条全局记忆里有 10 条是这种回执。补丁 `patches/dsh-018-memory-facts-vs-tickets-patch.mjs` 补上判别规则：
+
+| 位置 | 现状 | 打补丁后 |
+|---|---|---|
+| `lib/i18n.js` 的 `snap.reviewStep` / `snap.dueWarning`（**每轮常驻**下发的收尾指令） | 全局轨只开了一个出口 `memory_suggest`（语义＝新增事实）。审查时发现「这三条该合并」没有操作出口，只能把动作描述成事实塞进去，你一点确认就永久落进 MEMORY.md | 补一句判别：**整理动作（合并/归档/删除/清运）不是事实，不得写成记忆条目**；装了整理插件就走它的提案工具 `memory_propose` |
+| `skills/memory-consolidate/SKILL.md` 的硬边界 | 「只走 memory 工具 `replace`/`archive`/`add`」——它是「一轮系统性整合」的入口技能，却把整理定义成直接改记忆 | 改成「事实与工单分开」：零散单条直改，**成批整理走提案队列**，工单本身不写成条目 |
+
+**边界**：只改文案、不改逻辑；幂等（文件里已含 `memory_propose` 即整份跳过）；纯文本替换，`dsh plugin --profile web update dsh-memory-evolve` 重装即还原。**内核/插件升级会覆盖，升级后需重打**——本机把它放进升级流程的 `patches/` 目录，升级时按 `@applies-to` 自动重挂。
+
+自己打（人类）：
+
+```bash
+git clone https://github.com/rezon-aki/dsh-memory-steward && cd dsh-memory-steward
+node patches/dsh-018-memory-facts-vs-tickets-patch.mjs             # 默认 web profile
+node patches/dsh-018-memory-facts-vs-tickets-patch.mjs web-test    # 指定 profile
+node patches/dsh-018-memory-facts-vs-tickets-patch.mjs --root=<dsh-memory-evolve 包目录>   # 影子/临时副本
+```
+
+期望输出 `已打补丁 2 个文件 / 6 处`；再跑一次应输出 `无需打补丁（契约已在）`。打完重启 `dsh web`。
+
+让 agent 自己打——把下面这段原样丢给它：
+
+> 在本机给 dsh-memory-evolve 打「事实 / 工单判别」补丁：① `grep -c memory_propose ~/.dsh/profiles/web/node_modules/dsh-memory-evolve/lib/i18n.js`，非 0 说明已打过、直接结束；② 从 https://github.com/rezon-aki/dsh-memory-steward 取 `patches/dsh-018-memory-facts-vs-tickets-patch.mjs`；③ `node dsh-018-memory-facts-vs-tickets-patch.mjs`（非默认 profile 加 profile 名；影子环境设 `DSH_HOME=<影子目录>`）；④ 核对输出为「已打补丁 2 个文件 / 6 处」或「无需打补丁」，并 grep 确认 `lib/i18n.js` 出现「不是事实」；⑤ 重启 `dsh web`。补丁只改文案；若报「无匹配文本」说明上游改过这句，别强行替换。
+
 ## Tab 里有什么
 
 - **库存与预算**：三轨条数/字节 vs 预算、最老条目、到期状态（超预算/归档超量/距上次整理）
@@ -60,7 +88,7 @@ dsh plugin --profile web add github:rezon-aki/dsh-memory-steward
 | 工具 | 用途 |
 |---|---|
 | `memory_audit` | 库存/预算/候选簇/归档预筛/条目清单。`deep` 跑上游扫描器；`archiveCheck` 归档预筛（三桶：疑似已收录/归档独占/待判，最省 token）；`track:'all'` 一次拉全量 |
-| `memory_propose` | 提交提案（单条或 `proposals` 数组批量 ≤20 条）：`archive` / `remove` / `replace` / `purge`。`match` 只需唯一子串，host 解析成整条正文 |
+| `memory_propose` | 提交提案（单条或 `proposals` 数组批量 ≤20 条）：`archive` / `remove` / `replace` / `purge`。`match` 只需唯一子串，host 解析成整条正文；**执行时会按该子串再解析一次**（审批期间条目被改写也能对上），单个 op 失败不再中止整条提案 |
 | `memory_sweep_status` | 到期查询（`check`）与计时复位（`complete`） |
 
 ## 安全边界
@@ -117,7 +145,7 @@ Tab 里改，落盘在 `<memoryDir>/steward/config.json`（默认 `~/.dsh/memori
 **无构建步骤**：`lib/index.js`（host，ESM）与 `lib/client.js`（client，`window.__ModuleLoader__.load` 包装的 CJS）就是源码。
 
 ```bash
-npm test                     # 31 例，node --test，不需要安装任何依赖（Node ≥ 20）
+npm test                     # 33 例，node --test，不需要安装任何依赖（Node ≥ 20）
 node scripts/selfcheck.mjs   # 对运行中的实例逐项自检（加 --json 看原始返回）
 node scripts/fixture.mjs seed|status|clear   # 造/查/清浏览器验收夹具（原样重写，不改语义）
 ```
